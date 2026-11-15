@@ -1,0 +1,46 @@
+#version 450
+// AMD FidelityFX Super Resolution 1 - EASU (Edge-Adaptive Spatial Upsampling).
+//
+// The filter body is AMD's MIT-licensed ffx_fsr1.h (vendored under
+// third_party/ffx). This file only supplies the texel fetch hooks and the
+// dispatch boilerplate. Constants con0..con3 are generated on the host by
+// FsrEasuCon(), so the packing is bit-identical to the reference.
+//
+// Source: scene colour target (internal resolution), clamp-to-edge sampler.
+// Dest:   display-resolution intermediate, RGBA8 storage image.
+
+#define A_GPU 1
+#define A_GLSL 1
+#define FSR_EASU_F 1
+
+#include "ffx/ffx_a.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTexture;
+layout(set = 0, binding = 1, rgba8) uniform image2D dstImage;
+
+AF4 FsrEasuRF(AF2 p) { return textureGather(srcTexture, p, 0); }
+AF4 FsrEasuGF(AF2 p) { return textureGather(srcTexture, p, 1); }
+AF4 FsrEasuBF(AF2 p) { return textureGather(srcTexture, p, 2); }
+
+#include "ffx/ffx_fsr1.h"
+
+layout(push_constant) uniform EasuPush {
+    uvec4 con0;
+    uvec4 con1;
+    uvec4 con2;
+    uvec4 con3;
+} pc;
+
+void main() {
+    const uvec2 ip = gl_GlobalInvocationID.xy;
+    const ivec2 dstSize = imageSize(dstImage);
+    if (ip.x >= uint(dstSize.x) || ip.y >= uint(dstSize.y)) {
+        return;
+    }
+
+    AF3 pix;
+    FsrEasuF(pix, ip, pc.con0, pc.con1, pc.con2, pc.con3);
+    imageStore(dstImage, ivec2(ip), vec4(pix, 1.0));
+}

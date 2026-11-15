@@ -1,0 +1,32 @@
+# Game dumps and keys must never enter this repository.
+*.nsp
+*.xci
+*.nca
+*.nro
+*.nso
+*.kip
+*.kips
+prod.keys
+*.keys
+*.tik
+*.cert
+romfs and exefs/
+inputs/
+extracted/
+output_apk/
+
+# Android/Gradle
+.gradle/
+build/
+**/build/
+local.properties
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.log
+
+# Native
+*.o
+*.so
+!app/src/main/jniLibs/**/*.so

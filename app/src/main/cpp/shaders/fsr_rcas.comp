@@ -1,0 +1,46 @@
+#version 450
+// AMD FidelityFX Super Resolution 1 - RCAS (Robust Contrast-Adaptive Sharpening).
+// Runs after EASU at display resolution. The sharpening curve and noise
+// suppression come from AMD's MIT-licensed ffx_fsr1.h.
+
+#define A_GPU 1
+#define A_GLSL 1
+#define FSR_RCAS_F 1
+
+#include "ffx/ffx_a.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTexture;
+layout(set = 0, binding = 1, rgba8) uniform image2D dstImage;
+
+// RCAS samples exact integer positions. Clamp explicitly: texelFetch() out of
+// range is undefined in Vulkan, unlike the clamp-to-edge sampler used by EASU.
+AF4 FsrRcasLoadF(ASU2 p) {
+    const ivec2 last = textureSize(srcTexture, 0) - ivec2(1);
+    const ivec2 q = clamp(ivec2(p), ivec2(0), last);
+    return texelFetch(srcTexture, q, 0);
+}
+
+// Colour-space hook. The render target is already display-referred.
+void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) {}
+
+#include "ffx/ffx_fsr1.h"
+
+layout(push_constant) uniform RcasPush {
+    uvec4 con;
+} pc;
+
+void main() {
+    const uvec2 ip = gl_GlobalInvocationID.xy;
+    const ivec2 dstSize = imageSize(dstImage);
+    if (ip.x >= uint(dstSize.x) || ip.y >= uint(dstSize.y)) {
+        return;
+    }
+
+    AF1 r;
+    AF1 g;
+    AF1 b;
+    FsrRcasF(r, g, b, ip, pc.con);
+    imageStore(dstImage, ivec2(ip), vec4(r, g, b, 1.0));
+}
