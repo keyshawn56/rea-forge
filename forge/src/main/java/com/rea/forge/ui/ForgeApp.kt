@@ -416,7 +416,12 @@ private fun GateCard(
                 gate.checking && selection.exefsUri != null -> "Reading NSO and NPDM..."
                 gate.exefs == null -> "No executable folder selected"
                 gate.exefs.valid ->
-                    "${gate.exefs.nsoCount} NSO • ${gate.exefs.npdmCount} NPDM • NPDM 64-bit"
+                    "${gate.exefs.nsoCount} NSO • ${gate.exefs.npdmCount} NPDM • " +
+                        when (gate.exefs.npdm?.is64Bit) {
+                            true -> "64-bit"
+                            false -> "32-bit"
+                            null -> "bitness unknown"
+                        }
                 else -> gate.exefs.error ?: "Invalid exefs"
             },
             ok = gate.exefs?.valid == true,

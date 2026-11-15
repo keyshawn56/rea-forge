@@ -327,7 +327,7 @@ PipelineCacheResult buildPipelineCache(const std::vector<std::string>& spv_paths
     app.applicationVersion = 1;
     app.pEngineName = "REA Forge Pipeline Builder";
     app.engineVersion = 1;
-    app.apiVersion = VK_API_VERSION_1_1;
+    app.apiVersion = VK_API_VERSION_1_3;
 
     VkInstanceCreateInfo instance_info{};
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;

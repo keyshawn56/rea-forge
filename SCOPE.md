@@ -92,10 +92,11 @@ operation, not an installable or playable-content path.
   native raw-image parser for extracted `romfs.bin` files.
 - **Shaders:** KPS/BFRES/SPV inventory and magic sampling. Maxwell bytecode is
   not translated to SPIR-V, so no game pipeline is produced.
-- **Vulkan:** `VkPipelineCache` creation on the device GPU from the bundled
-  compute post-process SPIR-V (FSR 1 EASU/RCAS, GSR-style upscale, optical-flow
-  interpolation). Descriptor sets and push constants are reflected from SPIR-V;
-  graphics-stage assets are skipped and counted. No game shader is included.
+- **Vulkan:** a Vulkan 1.3 `VkPipelineCache` created on the device GPU from the
+  bundled compute post-process SPIR-V (FSR 1 EASU/RCAS, GSR-style upscale,
+  optical-flow interpolation). Descriptor sets and push constants are reflected
+  from SPIR-V; graphics-stage assets are skipped and counted. No game shader is
+  included.
 - **UI/reporting:** Compose gate/build dashboard, persisted graphics and input
   settings, foreground WorkManager build, and JSON reports under
   `files/reports/`.

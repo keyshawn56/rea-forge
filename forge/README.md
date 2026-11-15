@@ -99,9 +99,9 @@ Verified against the retail `main` NSO:
 - Validates the seven bundled `.spv` modules, then stages only valid modules.
 - Reflects SPIR-V entry-point model, descriptor set/binding usage, and push
   constants.
-- Compiles **compute** pipelines through the device's Vulkan driver and
-  serializes `VkPipelineCache` to
-  `files/gpu/pipeline_cache.bin`.
+- Creates a Vulkan 1.3 instance (the bundled modules are SPIR-V 1.6), compiles
+  **compute** pipelines through the device's Vulkan driver, and serializes
+  `VkPipelineCache` to `files/gpu/pipeline_cache.bin`.
 - The four compute assets (`fsr_easu`, `fsr_rcas`, `gsr_upscale`,
   `frame_interp`) are compiled; the three graphics assets (`scene_vert`,
   `scene_frag`, `shadow_frag`) are skipped and counted explicitly.
