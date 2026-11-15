@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "rea-aarch64-harness"
 include(":app")
+include(":forge")

@@ -1,0 +1,130 @@
+#version 450
+// Optical-flow frame interpolation, one pipeline with two dispatch modes.
+//
+// mode 0: block-matching motion estimation from the internal-resolution
+//         current/previous colour targets. Each invocation owns one
+//         MOTION_BLOCK x MOTION_BLOCK cell and writes a pixel-space motion
+//         vector into an RG16F image.
+// mode 1: flow-guided temporal blend at display resolution. The motion field
+//         is bilinearly upsampled, both display images are warped toward the
+//         requested temporal position, and a colour-consistency term suppresses
+//         ghosting on disocclusions.
+//
+// The search is deliberately small and strided: this runs on a phone GPU and
+// must stay under a fraction of a millisecond at 1440p. It is a game-style
+// approximation, not a variational optical-flow solver.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D currInternal;
+layout(set = 0, binding = 1) uniform sampler2D prevInternal;
+layout(set = 0, binding = 2, rg16f) uniform image2D motionOut;
+
+layout(set = 0, binding = 3) uniform sampler2D motionIn;
+layout(set = 0, binding = 4) uniform sampler2D prevDisplay;
+layout(set = 0, binding = 5) uniform sampler2D currDisplay;
+layout(set = 0, binding = 6, rgba8) uniform image2D blendOut;
+
+layout(push_constant) uniform InterpPush {
+    uvec2 internalSize;
+    uvec2 motionSize;
+    uvec2 displaySize;
+    uint mode;          // 0 = estimate, 1 = blend
+    float t;            // temporal position in [0,1]
+    float searchPx;     // maximum search distance in internal pixels
+    float pad;
+} pc;
+
+const int MOTION_BLOCK = 8;
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// Four-point luma footprint of a block, in internal-resolution pixels.
+float blockLuma(sampler2D tex, vec2 centrePx, float halfBlock) {
+    const vec2 inv = 1.0 / vec2(pc.internalSize);
+    const vec2 uv = centrePx * inv;
+    const vec2 d = vec2(halfBlock * 0.5) * inv;
+    float s0 = luma(textureLod(tex, uv + vec2(-d.x, -d.y), 0.0).rgb);
+    float s1 = luma(textureLod(tex, uv + vec2( d.x, -d.y), 0.0).rgb);
+    float s2 = luma(textureLod(tex, uv + vec2(-d.x,  d.y), 0.0).rgb);
+    float s3 = luma(textureLod(tex, uv + vec2( d.x,  d.y), 0.0).rgb);
+    return (s0 + s1 + s2 + s3) * 0.25;
+}
+
+void estimateMotion() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= int(pc.motionSize.x) || id.y >= int(pc.motionSize.y)) {
+        return;
+    }
+
+    const vec2 centre = (vec2(id) + 0.5) * float(MOTION_BLOCK);
+    const float ref = blockLuma(currInternal, centre, float(MOTION_BLOCK));
+
+    const int radius = int(pc.searchPx);
+    float bestCost = 1e9;
+    vec2 bestOffset = vec2(0.0);
+
+    // Stride 2 is enough for the low-frequency camera motion this pass is
+    // designed for; the blend pass tolerates a half-texel error.
+    for (int dy = -radius; dy <= radius; dy += 2) {
+        for (int dx = -radius; dx <= radius; dx += 2) {
+            const vec2 off = vec2(dx, dy);
+            const float sampleL = blockLuma(prevInternal, centre + off,
+                                            float(MOTION_BLOCK));
+            float cost = abs(sampleL - ref);
+            // Prefer small vectors when the match is ambiguous.
+            cost += 0.0015 * length(off);
+            if (cost < bestCost) {
+                bestCost = cost;
+                bestOffset = off;
+            }
+        }
+    }
+
+    imageStore(motionOut, id, vec4(bestOffset, 0.0, 1.0));
+}
+
+void blendFrames() {
+    const ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= int(pc.displaySize.x) || dst.y >= int(pc.displaySize.y)) {
+        return;
+    }
+
+    const vec2 uv = (vec2(dst) + 0.5) / pc.displaySize;
+    const vec2 mvPixels = textureLod(motionIn, uv, 0.0).xy;
+    const vec2 mvNorm = mvPixels / vec2(pc.internalSize);
+
+    // Symmetric warp: previous is pulled forward by t, current is pulled back
+    // by (1-t). This keeps the midpoint anchored when t == 0.5.
+    const vec2 prevUV = uv - mvNorm * pc.t;
+    const vec2 currUV = uv + mvNorm * (1.0 - pc.t);
+
+    const vec3 prevC = textureLod(prevDisplay, prevUV, 0.0).rgb;
+    const vec3 currC = textureLod(currDisplay, currUV, 0.0).rgb;
+
+    // Disocclusion / mismatch detector. A large colour disagreement means the
+    // two warped samples do not describe the same surface, so favour the
+    // current frame instead of producing a translucent double image.
+    const float mismatch = length(currC - prevC);
+    const float reliable = exp(-mismatch * 6.0);
+
+    // Clamp the vector length when the estimator locks onto a repeated
+    // background pattern. Large vectors are almost always wrong in a
+    // single-pair estimator.
+    const float mvLen = length(mvPixels);
+    const float trust = 1.0 - smoothstep(48.0, 96.0, mvLen);
+    const vec3 flow = mix(prevC, currC, pc.t);
+    const vec3 result = mix(currC, flow, reliable * trust);
+
+    imageStore(blendOut, dst, vec4(result, 1.0));
+}
+
+void main() {
+    if (pc.mode == 0u) {
+        estimateMotion();
+    } else {
+        blendFrames();
+    }
+}

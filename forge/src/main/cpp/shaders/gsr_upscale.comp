@@ -1,0 +1,85 @@
+#version 450
+// Snapdragon Game Super Resolution (GSR) style single-pass spatial upscaler.
+//
+// Clean-room implementation, not Qualcomm's reference shader. It is designed
+// for Adreno's FP16 ALUs: one 3x3 neighbourhood, no gather, no mip sampling,
+// no auxiliary buffers. The edge term suppresses the bilinear smear across
+// silhouettes, and the detail term restores contrast lost in the upscale.
+//
+// The scene target and destination are both RGBA8. The shader runs at the
+// destination resolution, one invocation per output pixel.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTexture;
+layout(set = 0, binding = 1, rgba8) uniform image2D dstImage;
+
+layout(push_constant) uniform GsrPush {
+    vec2 srcSize;
+    vec2 dstSize;
+    float sharpness;    // 0.0 = soft, 1.0 = aggressive
+    float edgeScale;    // cross-edge rejection, 0..4
+    float pad0;
+    float pad1;
+} pc;
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    const ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= int(pc.dstSize.x) || dst.y >= int(pc.dstSize.y)) {
+        return;
+    }
+
+    const vec2 uv = (vec2(dst) + 0.5) / pc.dstSize;
+    const vec2 sp = uv * pc.srcSize - 0.5;
+    const ivec2 base = ivec2(floor(sp));
+    const vec2 f = fract(sp);
+    const vec2 texel = 1.0 / pc.srcSize;
+
+    // 3x3 bilinear neighbourhood, centred on the source position. Sampling at
+    // exact texel centres keeps the weights deterministic (no implicit LOD).
+    vec3 c[9];
+    float w[9];
+    float wsum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            const ivec2 p = base + ivec2(x, y);
+            const int i = (y + 1) * 3 + (x + 1);
+            c[i] = textureLod(srcTexture, (vec2(p) + 0.5) / pc.srcSize, 0.0).rgb;
+            const vec2 d = vec2(x, y) - f;
+            w[i] = exp(-dot(d, d) * 1.75);
+        }
+    }
+
+    // Reject neighbours that sit across a strong edge from the centre. The
+    // centre is the texel nearest the fractional source position.
+    const vec3 centre = c[4];
+    const float centreL = luma(centre);
+    for (int i = 0; i < 9; ++i) {
+        const float edge = abs(luma(c[i]) - centreL);
+        w[i] *= exp(-edge * pc.edgeScale * 8.0);
+        wsum += w[i];
+    }
+    wsum = max(wsum, 1e-5);
+
+    vec3 accum = vec3(0.0);
+    for (int i = 0; i < 9; ++i) {
+        accum += c[i] * (w[i] / wsum);
+    }
+
+    // Detail restoration. The low-pass reference is the centre texel, so this
+    // is a local unsharp mask rather than a global contrast stretch.
+    vec3 detail = centre - accum;
+    vec3 result = accum + detail * (pc.sharpness * 1.5);
+
+    // Keep highlights from clipping into hard white bands.
+    const float peak = max(max(result.r, result.g), result.b);
+    if (peak > 0.94) {
+        result = mix(result, result / peak, smoothstep(0.94, 1.4, peak) * 0.85);
+    }
+
+    imageStore(dstImage, dst, vec4(clamp(result, 0.0, 1.0), 1.0));
+}
